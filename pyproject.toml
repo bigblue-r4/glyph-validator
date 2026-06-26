@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "glyph-validator"
+version = "1.0.0"
+description = "Lightweight CJK glyph geometric coherence validator — deterministic, no LLM, no network."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+keywords = ["security", "unicode", "cjk", "validation", "computer-vision"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Text Processing :: Filters",
+]
+dependencies = [
+    "numpy>=1.21",
+    "opencv-python-headless>=4.5",
+    "Pillow>=8.0",
+]
+
+[project.scripts]
+glyph-validator = "glyph_validator:_cli"
+
+[project.urls]
+Repository = "https://github.com/bigblue-r4/glyph-validator"
+
+[tool.setuptools]
+py-modules = ["glyph_validator"]
