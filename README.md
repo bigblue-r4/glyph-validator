@@ -8,6 +8,19 @@ no linguistic processing. Pure NumPy / OpenCV / Pillow mathematics.
 
 [![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![PyPI](https://img.shields.io/pypi/v/glyph-validator.svg)](https://pypi.org/project/glyph-validator)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white)](https://www.python.org)
+
+## Contents
+
+- [What It Does](#what-it-does)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Modes](#modes)
+- [CLI](#cli)
+- [API](#api)
+- [Font Configuration](#font-configuration)
+- [Dependencies](#dependencies)
+- [License](#license)
 
 ---
 
