@@ -1,0 +1,162 @@
+name: release
+
+# Cut a release by pushing a tag:
+#
+#     git tag -a v1.0.1 -m "…" && git push origin v1.0.1
+#
+# That builds the sdist and wheel, proves they install and run, publishes to
+# PyPI, and creates the GitHub release with the artifacts attached. Nothing is
+# published by hand, so the tag, the GitHub release and the PyPI version can
+# never drift apart the way they did for unicode-interference — that crate went
+# to crates.io untagged and nothing on GitHub named the source it was built from
+# until two months later.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:      # build and verify without publishing
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build and verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # The tag is the claim; pyproject.toml is the fact. A mismatch means the
+      # artifact would go out under a version nobody chose, so fail here rather
+      # than discover it on PyPI, where a version number can never be reused.
+      # (split-brain-harness published 1.3.0 from a branch 32 commits past its
+      # v1.3.0 tag and had to yank it. This is that lesson, enforced.)
+      - name: Tag must match the version in pyproject.toml
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          PROJ=$(python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "tag=$TAG  pyproject=$PROJ"
+          if [ "$TAG" != "$PROJ" ]; then
+            echo "::error::tag v$TAG does not match pyproject.toml version $PROJ"
+            exit 1
+          fi
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check dist/*
+
+      # validate_payload() rasterises each CJK glyph and needs a real CJK face.
+      # FONT_PATH is the path this package looks at first and is exactly what
+      # fonts-noto-cjk installs on Debian/Ubuntu.
+      - name: Install a CJK font
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+
+      # Install the built wheel — not the checkout — so this exercises what a
+      # user actually receives, including the console script and the pinned
+      # numpy/opencv/Pillow dependencies.
+      - name: Smoke-test the wheel
+        run: |
+          set -euo pipefail
+          python -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"        # leave the repo so the module cannot be imported from source
+          python - <<'PY'
+          from importlib.metadata import version
+          import glyph_validator as g
+
+          print("installed version:", version("glyph-validator"))
+
+          # No CJK in the payload: returns before a font is ever loaded.
+          assert g.validate_payload("hello world") == {"status": "pass", "code": 200}
+
+          # Real CJK: rasterises, runs the five coherence checks, passes.
+          r = g.validate_payload("安全性能")
+          assert r == {"status": "pass", "code": 200}, r
+
+          # Mixed script is the case this exists for.
+          r = g.validate_payload("login 安全")
+          assert r == {"status": "pass", "code": 200}, r
+
+          print("api OK")
+          PY
+          glyph-validator "Hello 中文"        # console script, exits 0 on pass
+          echo "cli OK"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/*
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write     # PyPI Trusted Publishing — this replaces the token
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      # Preferred path: Trusted Publishing. PyPI verifies a short-lived OIDC
+      # token minted by this workflow, so there is no long-lived credential to
+      # store, leak or rotate. Configure it once at
+      # pypi.org/manage/account/publishing with:
+      #     owner bigblue-r4 · repo glyph-validator
+      #     workflow release.yml · environment pypi
+      # PyPI accepts a "pending publisher" for a project that does not exist
+      # yet, so the FIRST publish can go this way too — no token is ever needed.
+      # The `secrets` context does not evaluate inside a step `if:`, so read it
+      # into an output first and branch on that — the same workaround
+      # deobfuscate-rs's python-wheels.yml uses.
+      - name: Is a token configured?
+        id: token
+        run: |
+          if [ -n "${{ secrets.PYPI_API_TOKEN }}" ]; then
+            echo "have_token=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::PYPI_API_TOKEN is set — publishing with it. Trusted Publishing needs no secret; consider removing it."
+          else
+            echo "have_token=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish (Trusted Publishing)
+        if: steps.token.outputs.have_token == 'false'
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      # Fallback, only when a PYPI_API_TOKEN secret exists. Prefer the path
+      # above and delete the secret once trusted publishing is configured.
+      - name: Publish (API token)
+        if: steps.token.outputs.have_token == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+  github-release:
+    name: github release
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      # Node20 action; the shim matches kiss-protocol's release.yml.
+      - uses: softprops/action-gh-release@v2
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+        with:
+          files: dist/*
+          generate_release_notes: true
