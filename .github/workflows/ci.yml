@@ -1,0 +1,80 @@
+name: CI
+
+# Until this existed, nothing verified this package on the way in. The only
+# workflow was release.yml, which runs on a tag — so a syntax error or a broken
+# API could sit on master unnoticed and the first thing to exercise it would be
+# the tag that publishes to PyPI over OIDC, where a version number can never be
+# reused. This runs the same verification before the code lands rather than
+# after it ships.
+#
+# The assertions live in smoke_test.py, which release.yml also runs. One copy on
+# purpose: two would drift, and the copy that gates publishing is the one nobody
+# would notice going stale.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    # Deliberately NOT "build and verify" — that is release.yml's job name, and
+    # two workflows reporting the same check context makes a required status
+    # check ambiguous about which one satisfied it. This reports as "verify".
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # Catches a syntax error without installing the dependency stack first,
+      # so the common failure reports in seconds instead of after an opencv
+      # install.
+      - name: Compile check
+        run: python -m compileall -q glyph_validator.py smoke_test.py
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check dist/*
+
+      # validate_payload() rasterises each CJK glyph and needs a real CJK face.
+      # fonts-noto-cjk installs exactly where glyph_validator.FONT_PATH looks.
+      - name: Install a CJK font
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+
+      # Install the built wheel, not the checkout, so this exercises what a user
+      # actually receives — console script and pinned numpy/opencv/Pillow
+      # included. Running from RUNNER_TEMP keeps the source tree off sys.path;
+      # smoke_test.py asserts that it really did import from site-packages.
+      - name: Smoke-test the wheel
+        run: |
+          set -euo pipefail
+          python -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          cp "$GITHUB_WORKSPACE/smoke_test.py" .
+          python smoke_test.py
+          glyph-validator "Hello 中文"
+          echo "cli OK"
+
+      # A version already on PyPI can never be republished, so a PR that forgets
+      # to bump is worth knowing about before it is tagged. A warning, not a
+      # failure: most PRs legitimately do not bump the version.
+      - name: Note whether this version is already published
+        if: github.event_name == 'pull_request'
+        run: |
+          set -uo pipefail
+          V=$(python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/glyph-validator/$V/json" || echo "000")
+          if [ "$CODE" = "200" ]; then
+            echo "::warning::version $V is already on PyPI — a tag at this version could not be published"
+          else
+            echo "version $V is not on PyPI yet (HTTP $CODE)"
+          fi
