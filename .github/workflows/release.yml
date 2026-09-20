@@ -61,30 +61,17 @@ jobs:
       # Install the built wheel — not the checkout — so this exercises what a
       # user actually receives, including the console script and the pinned
       # numpy/opencv/Pillow dependencies.
+      # Assertions live in smoke_test.py, which ci.yml runs on every push and
+      # pull request. One copy on purpose: inlining them here as well would
+      # leave two to drift, and this is the copy that gates publishing — the
+      # one whose staleness nobody would notice.
       - name: Smoke-test the wheel
         run: |
           set -euo pipefail
           python -m pip install dist/*.whl
           cd "$RUNNER_TEMP"        # leave the repo so the module cannot be imported from source
-          python - <<'PY'
-          from importlib.metadata import version
-          import glyph_validator as g
-
-          print("installed version:", version("glyph-validator"))
-
-          # No CJK in the payload: returns before a font is ever loaded.
-          assert g.validate_payload("hello world") == {"status": "pass", "code": 200}
-
-          # Real CJK: rasterises, runs the five coherence checks, passes.
-          r = g.validate_payload("安全性能")
-          assert r == {"status": "pass", "code": 200}, r
-
-          # Mixed script is the case this exists for.
-          r = g.validate_payload("login 安全")
-          assert r == {"status": "pass", "code": 200}, r
-
-          print("api OK")
-          PY
+          cp "$GITHUB_WORKSPACE/smoke_test.py" .
+          python smoke_test.py
           glyph-validator "Hello 中文"        # console script, exits 0 on pass
           echo "cli OK"
 
